@@ -23,5 +23,7 @@ window.storage = {
 }
 
 createRoot(document.getElementById('root')).render(
-  StrictMode({ children: App() })
+  <StrictMode>
+    <App />
+  </StrictMode>
 )
