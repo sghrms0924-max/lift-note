@@ -23,7 +23,7 @@ window.storage = {
 }
 
 createRoot(document.getElementById('root')).render(
-  <StrictMode>
-    <App />
-  </StrictMode>,
+  React.createElement(StrictMode, null,
+    React.createElement(App, null)
+  )
 )
