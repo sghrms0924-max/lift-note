@@ -13,12 +13,60 @@ const DEFAULT_MASTER = {
 const ACCENT = "#FF8C00";
 const GOLD = "#FFD700";
 const MASTER_KEY = "master:exercises";
+const TRAINING_DAYS_KEY = "trainingDays";
 const prKey = (ex) => `pr:${ex.replace(/\s/g, "_")}`;
 const todayStr = () => new Date().toISOString().split("T")[0];
 const dayExercisesKey = (date) => `exercises:${date}`;
 const setsKey = (date, ex) => `sets:${date}:${ex.replace(/\s/g, "_")}`;
 
+// ── Helper: find previous record for an exercise ────────
+async function findPrevRecord(exercise, currentDate) {
+  // Search backwards up to 90 days for the last time this exercise was done
+  const d = new Date(currentDate);
+  for (let i = 1; i <= 90; i++) {
+    d.setDate(d.getDate() - 1);
+    const dateStr = d.toISOString().split("T")[0];
+    try {
+      const res = await window.storage.get(setsKey(dateStr, exercise));
+      if (res) {
+        const sets = JSON.parse(res.value);
+        if (sets.length > 0 && sets.some(s => s.weight || s.reps)) {
+          return { date: dateStr, sets };
+        }
+      }
+    } catch {}
+  }
+  return null;
+}
 
+// ── Helper: load training days ──────────────────────────
+async function loadTrainingDays() {
+  try {
+    const res = await window.storage.get(TRAINING_DAYS_KEY);
+    if (res) return JSON.parse(res.value);
+  } catch {}
+  return [];
+}
+
+async function saveTrainingDays(days) {
+  try { await window.storage.set(TRAINING_DAYS_KEY, JSON.stringify(days)); } catch {}
+}
+
+async function markTrainingDay(date) {
+  const days = await loadTrainingDays();
+  if (!days.includes(date)) {
+    days.push(date);
+    await saveTrainingDays(days);
+  }
+  return days;
+}
+
+async function unmarkTrainingDay(date) {
+  const days = await loadTrainingDays();
+  const filtered = days.filter(d => d !== date);
+  await saveTrainingDays(filtered);
+  return filtered;
+}
 
 // ── SetRow ──────────────────────────────────────────────
 function SetRow({ set, onChange, onRemove, isNewPR }) {
@@ -38,11 +86,13 @@ function SetRow({ set, onChange, onRemove, isNewPR }) {
 }
 
 // ── ExerciseCard ─────────────────────────────────────────
-function ExerciseCard({ exercise, date, onRemove, master }) {
+function ExerciseCard({ exercise, date, onRemove, master, onSetsChange }) {
   const [sets, setSets] = useState([]);
   const [pr, setPr] = useState(null);
   const [loaded, setLoaded] = useState(false);
   const [showingNewPR, setShowingNewPR] = useState(false);
+  const [prevRecord, setPrevRecord] = useState(null);
+  const [showPrev, setShowPrev] = useState(false);
 
   useEffect(() => {
     (async () => {
@@ -51,15 +101,20 @@ function ExerciseCard({ exercise, date, onRemove, master }) {
           window.storage.get(setsKey(date, exercise)),
           window.storage.get(prKey(exercise)),
         ]);
-        setSets(setsRes.status === "fulfilled" && setsRes.value ? JSON.parse(setsRes.value.value) : []);
+        const loadedSets = setsRes.status === "fulfilled" && setsRes.value ? JSON.parse(setsRes.value.value) : [];
+        setSets(loadedSets);
         setPr(prRes.status === "fulfilled" && prRes.value ? JSON.parse(prRes.value.value) : null);
       } catch { setSets([]); }
+      // Load previous record
+      const prev = await findPrevRecord(exercise, date);
+      setPrevRecord(prev);
       setLoaded(true);
     })();
   }, [date, exercise]);
 
   const saveSets = async (s) => {
     try { await window.storage.set(setsKey(date, exercise), JSON.stringify(s)); } catch {}
+    if (onSetsChange) onSetsChange(s);
   };
 
   const updatePR = async (newSets) => {
@@ -73,13 +128,8 @@ function ExerciseCard({ exercise, date, onRemove, master }) {
       const messages = [];
       if (isWeightPR) messages.push(`最高重量: ${pr?.maxWeight || 0}kg → ${maxWeight}kg`);
       if (isVolumePR) messages.push(`最高ボリューム: ${(pr?.maxVolume || 0).toLocaleString()}kg → ${totalVol.toLocaleString()}kg`);
-
-      const confirmed = window.confirm(
-        `🏆 新記録です！更新しますか？\n\n${messages.join("\n")}`
-      );
-
+      const confirmed = window.confirm(`🏆 新記録です！更新しますか？\n\n${messages.join("\n")}`);
       if (!confirmed) return;
-
       setShowingNewPR(true);
       setTimeout(() => setShowingNewPR(false), 3000);
     }
@@ -102,6 +152,12 @@ function ExerciseCard({ exercise, date, onRemove, master }) {
   const prWeight = pr?.maxWeight || 0;
 
   if (!loaded) return null;
+
+  const formatPrevDate = (dateStr) => {
+    const d = new Date(dateStr);
+    const dayNames = ["日", "月", "火", "水", "木", "金", "土"];
+    return `${d.getMonth() + 1}/${d.getDate()}（${dayNames[d.getDay()]}）`;
+  };
 
   return (
     <>
@@ -137,6 +193,29 @@ function ExerciseCard({ exercise, date, onRemove, master }) {
             <button onClick={onRemove} style={{ ...removeBtn, fontSize: 16 }}>🗑</button>
           </div>
         </div>
+
+        {/* Previous Record */}
+        {prevRecord && (
+          <div style={{ marginBottom: 10 }}>
+            <button onClick={() => setShowPrev(!showPrev)} style={{
+              background: "#1a1a2e", border: "1px solid #2a2a45", borderRadius: 8,
+              padding: "6px 10px", cursor: "pointer", width: "100%", textAlign: "left",
+              display: "flex", justifyContent: "space-between", alignItems: "center",
+            }}>
+              <span style={{ fontSize: 11, color: "#888" }}>📋 前回: {formatPrevDate(prevRecord.date)}</span>
+              <span style={{ fontSize: 10, color: "#555" }}>{showPrev ? "▲" : "▼"}</span>
+            </button>
+            {showPrev && (
+              <div style={{ background: "#1a1a2e", borderRadius: "0 0 8px 8px", padding: "8px 10px", borderTop: "none" }}>
+                {prevRecord.sets.map((s, i) => (
+                  <div key={i} style={{ fontSize: 12, color: "#777", marginBottom: 3 }}>
+                    Set {i + 1}: {s.weight || 0}kg × {s.reps || 0}回
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
 
         {pr && (pr.maxWeight > 0 || pr.maxVolume > 0) && (
           <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
@@ -324,8 +403,8 @@ function MasterEditor({ master, onSave, onClose }) {
   );
 }
 
-// ── CalendarStrip ────────────────────────────────────────
-function CalendarStrip({ selectedDate, onSelect }) {
+// ── CalendarStrip (with training day marks) ──────────────
+function CalendarStrip({ selectedDate, onSelect, trainingDays }) {
   const dates = [];
   const today = new Date();
   for (let i = -3; i <= 3; i++) {
@@ -340,6 +419,7 @@ function CalendarStrip({ selectedDate, onSelect }) {
         const str = d.toISOString().split("T")[0];
         const isSelected = str === selectedDate;
         const isToday = str === todayStr();
+        const hasTraining = trainingDays.includes(str);
         return (
           <button key={str} onClick={() => onSelect(str)} style={{
             flex: "0 0 auto", width: 48, height: 60, borderRadius: 12,
@@ -347,13 +427,145 @@ function CalendarStrip({ selectedDate, onSelect }) {
             background: isSelected ? "#FF8C0022" : isToday ? "#ffffff08" : "transparent",
             color: isSelected ? ACCENT : "#888", cursor: "pointer",
             display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 2,
+            position: "relative",
           }}>
             <span style={{ fontSize: 10, fontWeight: 600 }}>{dayNames[d.getDay()]}</span>
             <span style={{ fontSize: 18, fontWeight: 800 }}>{d.getDate()}</span>
-            {isToday && <div style={{ width: 4, height: 4, borderRadius: 2, background: ACCENT }} />}
+            {hasTraining ? (
+              <div style={{ width: 6, height: 6, borderRadius: 3, background: ACCENT }} />
+            ) : isToday ? (
+              <div style={{ width: 4, height: 4, borderRadius: 2, background: "#555" }} />
+            ) : (
+              <div style={{ width: 4, height: 4 }} />
+            )}
           </button>
         );
       })}
+    </div>
+  );
+}
+
+// ── StatsView (weekly/monthly graph) ────────────────────
+function StatsView({ trainingDays, onClose }) {
+  const today = new Date();
+  const [viewMode, setViewMode] = useState("week"); // "week" or "month"
+
+  // Weekly data: last 8 weeks
+  const getWeeklyData = () => {
+    const weeks = [];
+    for (let w = 7; w >= 0; w--) {
+      const weekStart = new Date(today);
+      weekStart.setDate(today.getDate() - today.getDay() - (w * 7));
+      const weekEnd = new Date(weekStart);
+      weekEnd.setDate(weekStart.getDate() + 6);
+
+      let count = 0;
+      trainingDays.forEach(d => {
+        const date = new Date(d);
+        if (date >= weekStart && date <= weekEnd) count++;
+      });
+
+      const label = `${weekStart.getMonth() + 1}/${weekStart.getDate()}`;
+      weeks.push({ label, count });
+    }
+    return weeks;
+  };
+
+  // Monthly data: last 6 months
+  const getMonthlyData = () => {
+    const months = [];
+    for (let m = 5; m >= 0; m--) {
+      const d = new Date(today.getFullYear(), today.getMonth() - m, 1);
+      const monthEnd = new Date(d.getFullYear(), d.getMonth() + 1, 0);
+      const monthStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+
+      let count = 0;
+      trainingDays.forEach(td => {
+        if (td.startsWith(monthStr)) count++;
+      });
+
+      months.push({ label: `${d.getMonth() + 1}月`, count });
+    }
+    return months;
+  };
+
+  const data = viewMode === "week" ? getWeeklyData() : getMonthlyData();
+  const maxCount = Math.max(1, ...data.map(d => d.count));
+
+  return (
+    <div style={{
+      position: "fixed", inset: 0, background: "#0a0a0a", zIndex: 200,
+      overflowY: "auto", padding: "24px 16px 40px", boxSizing: "border-box",
+      fontFamily: "'Hiragino Sans', 'Noto Sans JP', sans-serif",
+    }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 24 }}>
+        <div>
+          <div style={{ fontSize: 11, letterSpacing: 3, color: ACCENT, fontWeight: 700, marginBottom: 2 }}>STATS</div>
+          <div style={{ fontSize: 22, fontWeight: 900, color: "#fff" }}>トレーニング記録</div>
+        </div>
+        <button onClick={onClose} style={{ background: "#1a1a1a", border: "1px solid #2a2a45", color: "#888", borderRadius: 10, padding: "8px 14px", cursor: "pointer", fontSize: 13 }}>✕ 閉じる</button>
+      </div>
+
+      {/* Toggle */}
+      <div style={{ display: "flex", gap: 8, marginBottom: 24 }}>
+        {["week", "month"].map(mode => (
+          <button key={mode} onClick={() => setViewMode(mode)} style={{
+            flex: 1, padding: "10px", borderRadius: 10, border: "none", cursor: "pointer",
+            background: viewMode === mode ? ACCENT : "#1a1a1a",
+            color: viewMode === mode ? "#000" : "#888",
+            fontWeight: 700, fontSize: 13,
+          }}>
+            {mode === "week" ? "週間" : "月間"}
+          </button>
+        ))}
+      </div>
+
+      {/* Summary */}
+      <div style={{
+        background: "#141414", border: "1px solid #2a2a45", borderRadius: 16,
+        padding: "16px", marginBottom: 24, textAlign: "center",
+      }}>
+        <div style={{ fontSize: 11, color: "#888", marginBottom: 4 }}>
+          {viewMode === "week" ? "今週のトレーニング" : "今月のトレーニング"}
+        </div>
+        <div style={{ fontSize: 36, fontWeight: 900, color: ACCENT }}>
+          {data[data.length - 1].count}
+          <span style={{ fontSize: 14, color: "#888", fontWeight: 600 }}> 日</span>
+        </div>
+      </div>
+
+      {/* Bar Chart */}
+      <div style={{
+        background: "#141414", border: "1px solid #2a2a45", borderRadius: 16,
+        padding: "20px 16px",
+      }}>
+        <div style={{ fontSize: 13, color: "#888", fontWeight: 700, marginBottom: 16 }}>
+          {viewMode === "week" ? "週ごとの回数（過去8週）" : "月ごとの回数（過去6ヶ月）"}
+        </div>
+        <div style={{ display: "flex", alignItems: "flex-end", gap: viewMode === "week" ? 8 : 12, height: 150 }}>
+          {data.map((d, i) => {
+            const isLast = i === data.length - 1;
+            const barHeight = maxCount > 0 ? (d.count / maxCount) * 120 : 0;
+            return (
+              <div key={i} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 4 }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: isLast ? ACCENT : "#666" }}>
+                  {d.count > 0 ? d.count : ""}
+                </div>
+                <div style={{
+                  width: "100%", maxWidth: 32,
+                  height: Math.max(barHeight, d.count > 0 ? 4 : 0),
+                  background: isLast ? ACCENT : "#2a2a45",
+                  borderRadius: 4,
+                  transition: "height 0.3s",
+                }} />
+                <div style={{ fontSize: 9, color: "#555", fontWeight: 600, whiteSpace: "nowrap" }}>
+                  {d.label}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
     </div>
   );
 }
@@ -365,6 +577,8 @@ export default function App() {
   const [master, setMaster] = useState(DEFAULT_MASTER);
   const [loaded, setLoaded] = useState(false);
   const [showEditor, setShowEditor] = useState(false);
+  const [showStats, setShowStats] = useState(false);
+  const [trainingDays, setTrainingDays] = useState([]);
 
   useEffect(() => {
     (async () => {
@@ -372,6 +586,8 @@ export default function App() {
         const r = await window.storage.get(MASTER_KEY);
         if (r) setMaster(JSON.parse(r.value));
       } catch {}
+      const days = await loadTrainingDays();
+      setTrainingDays(days);
     })();
   }, []);
 
@@ -388,6 +604,14 @@ export default function App() {
 
   const saveExercises = async (exs) => {
     try { await window.storage.set(dayExercisesKey(selectedDate), JSON.stringify(exs)); } catch {}
+    // Update training days
+    if (exs.length > 0) {
+      const days = await markTrainingDay(selectedDate);
+      setTrainingDays(days);
+    } else {
+      const days = await unmarkTrainingDay(selectedDate);
+      setTrainingDays(days);
+    }
   };
 
   const addExercise = (name) => {
@@ -416,6 +640,7 @@ export default function App() {
   return (
     <>
       {showEditor && <MasterEditor master={master} onSave={saveMaster} onClose={() => setShowEditor(false)} />}
+      {showStats && <StatsView trainingDays={trainingDays} onClose={() => setShowStats(false)} />}
       <div style={{
         minHeight: "100vh", background: "#0a0a0a", color: "#f0f0f0",
         fontFamily: "'Hiragino Sans', 'Noto Sans JP', sans-serif",
@@ -424,15 +649,20 @@ export default function App() {
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 24 }}>
           <div>
             <div style={{ fontSize: 11, letterSpacing: 3, color: ACCENT, fontWeight: 700, marginBottom: 4 }}>LIFT NOTE</div>
-            
           </div>
-          <button onClick={() => setShowEditor(true)} style={{
-            background: "#1a1a1a", border: "1px solid #2a2a45", color: "#888",
-            borderRadius: 12, padding: "8px 14px", cursor: "pointer", fontSize: 13, fontWeight: 600,
-          }}>⚙️ 種目管理</button>
+          <div style={{ display: "flex", gap: 6 }}>
+            <button onClick={() => setShowStats(true)} style={{
+              background: "#1a1a1a", border: "1px solid #2a2a45", color: "#888",
+              borderRadius: 12, padding: "8px 14px", cursor: "pointer", fontSize: 13, fontWeight: 600,
+            }}>📊 統計</button>
+            <button onClick={() => setShowEditor(true)} style={{
+              background: "#1a1a1a", border: "1px solid #2a2a45", color: "#888",
+              borderRadius: 12, padding: "8px 14px", cursor: "pointer", fontSize: 13, fontWeight: 600,
+            }}>⚙️ 種目管理</button>
+          </div>
         </div>
 
-        <CalendarStrip selectedDate={selectedDate} onSelect={setSelectedDate} />
+        <CalendarStrip selectedDate={selectedDate} onSelect={setSelectedDate} trainingDays={trainingDays} />
         <div style={{ fontSize: 15, fontWeight: 700, color: "#aaa", marginBottom: 16 }}>{dateLabel}</div>
 
         {loaded ? (
