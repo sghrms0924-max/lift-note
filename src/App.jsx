@@ -68,15 +68,27 @@ function ExerciseCard({ exercise, date, onRemove, master }) {
     if (maxWeight === 0) return;
     const isWeightPR = maxWeight > (pr?.maxWeight || 0);
     const isVolumePR = totalVol > (pr?.maxVolume || 0);
+
+    if (isWeightPR || isVolumePR) {
+      const messages = [];
+      if (isWeightPR) messages.push(`最高重量: ${pr?.maxWeight || 0}kg → ${maxWeight}kg`);
+      if (isVolumePR) messages.push(`最高ボリューム: ${(pr?.maxVolume || 0).toLocaleString()}kg → ${totalVol.toLocaleString()}kg`);
+
+      const confirmed = window.confirm(
+        `🏆 新記録です！更新しますか？\n\n${messages.join("\n")}`
+      );
+
+      if (!confirmed) return;
+
+      setShowingNewPR(true);
+      setTimeout(() => setShowingNewPR(false), 3000);
+    }
+
     const newPR = {
       maxWeight: Math.max(maxWeight, pr?.maxWeight || 0),
       maxVolume: Math.max(totalVol, pr?.maxVolume || 0),
       date,
     };
-    if (isWeightPR || isVolumePR) {
-      setShowingNewPR(true);
-      setTimeout(() => setShowingNewPR(false), 3000);
-    }
     setPr(newPR);
     try { await window.storage.set(prKey(exercise), JSON.stringify(newPR)); } catch {}
   };
